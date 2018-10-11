@@ -4,6 +4,8 @@ import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothServerSocket;
+import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -15,6 +17,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.Message;
+import android.provider.Telephony;
 import android.support.annotation.NonNull;
 import android.support.annotation.RequiresApi;
 import android.support.v4.content.ContextCompat;
@@ -22,13 +26,21 @@ import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.support.v7.widget.Toolbar;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.view.View;
 import android.widget.Toast;
 
+import java.io.IOException;
+import java.net.Socket;
+import java.util.TreeMap;
+import java.util.UUID;
+
 import butterknife.BindView;
 import butterknife.ButterKnife;
 import butterknife.OnClick;
+
+import static android.provider.Settings.NameValueTable.NAME;
 
 public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnDeviceListener {
 
@@ -39,14 +51,18 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
 
     public static final int REQUEST_ENABLE_BT = 1;
     private static final int PERMISSION_REQUEST_COARSE_LOCATION = 456;
-    // Stops scanning after 20 seconds.
-    private static final long SCAN_PERIOD = 10000;
+
+    static final int STATE_LISTENING = 1;
+    static final int STATE_CONNECTING = 2;
+    static final int STATE_CONNECTED = 3;
+    static final int STATE_CONNECTION_FAILED = 4;
+    static final int STATE_MASSAGE_RECEIVED = 5;
+
+    private static final UUID MY_UUID = UUID.fromString("69027635-0ef7-42d2-96d9-60a67ea863a0");
 
     private BluetoothAdapter mBluetoothAdapter;
     private DeviceAdapter mDeviceAdapter;
     private BluetoothManager mBluetoothManager;
-    private boolean mScanning;
-    private Handler mHandler;
     private BluetoothLeService mBluetoothLeService;
 
     @Override
@@ -58,7 +74,6 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
         rvDevices.setLayoutManager(new LinearLayoutManager(this));
         mDeviceAdapter = new DeviceAdapter(this);
         rvDevices.setAdapter(mDeviceAdapter);
-        mHandler = new Handler();
         // Initializes Bluetooth adapter.
         mBluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         mBluetoothAdapter = mBluetoothManager.getAdapter();
@@ -68,66 +83,36 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
             Toast.makeText(this, R.string.ble_not_supported, Toast.LENGTH_SHORT).show();
             finish();
         }
-
         // Ensures Bluetooth is available on the device and it is enabled. If not,
-// displays a dialog requesting user permission to enable Bluetooth.
+        // displays a dialog requesting user permission to enable Bluetooth.
         if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()) {
             Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
             startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
         }
-        startService();
-
+//        Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
+//        bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        //  scanLeDevice(false);
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-        //    scanLeDevice(false);
+
     }
 
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Don't forget to unregister the ACTION_FOUND receiver.
+        unregisterReceiver(mReceiver);
+//        unbindService(mServiceConnection);
+//        mBluetoothLeService = null;
 
-//    private void scanLeDevice(final boolean enable) {
-//        if (enable ) {
-//            Toast.makeText(this, "Start Scanning", Toast.LENGTH_SHORT).show();
-//            // Stops scanning after a pre-defined scan period.
-//            mHandler.postDelayed(new Runnable() {
-//                @Override
-//                public void run() {
-//                    Toast.makeText(PairActivity.this, "Stop Scanning", Toast.LENGTH_SHORT).show();
-//                    mScanning = false;
-//                    mBluetoothAdapter.stopLeScan(mLeScanCallback);
-//                }
-//            }, SCAN_PERIOD);
-//            mScanning = true;
-//            mBluetoothAdapter.startLeScan(mLeScanCallback);
-//        } else {
-//            mScanning = false;
-//            mBluetoothAdapter.stopLeScan(mLeScanCallback);
-//        }
-//    }
-
-    // Device scan callback.
-//    private BluetoothAdapter.LeScanCallback mLeScanCallback =
-//            new BluetoothAdapter.LeScanCallback() {
-//                @Override
-//                public void onLeScan(final BluetoothDevice device, final int rssi,
-//                                     byte[] scanRecord) {
-//                    runOnUiThread(new Runnable() {
-//                        @Override
-//                        public void run() {
-//                            Log.d(getClass().getSimpleName(), "device name: " + device.getName());
-//                            Log.d(getClass().getSimpleName(), "device address: " + rssi);
-//                            deviceAdapter.addDevice(device);
-//                        }
-//                    });
-//                }
-//            };
+    }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
     @OnClick({R.id.fab})
@@ -142,10 +127,11 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
                         != PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, PERMISSION_REQUEST_COARSE_LOCATION);
                 } else {
-                    //scanLeDevice(true);
                     // Register for broadcasts when a device is discovered.
                     mDeviceAdapter.clear();
                     mBluetoothAdapter.startDiscovery();
+                    ServerClass serverClass = new ServerClass();
+                    serverClass.start();
                     IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
                     registerReceiver(mReceiver, filter);
                 }
@@ -154,6 +140,7 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
     }
 
     // Create a BroadcastReceiver for ACTION_FOUND.
+
     private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
@@ -197,41 +184,92 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
     }
 
     @Override
-    public void onDeviceClick(final String mDeviceAddress) {
-
-        mBluetoothLeService.connect(mDeviceAddress);
+    public void onDeviceClick( BluetoothDevice device) {
+        mBluetoothAdapter.cancelDiscovery();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            device.createBond();
+        }
+        ClientClass clientClass = new ClientClass(device);
+        clientClass.start();
+//        Toast.makeText(this,mDeviceAddress,Toast.LENGTH_SHORT).show();
+//        mBluetoothLeService.connect(mDeviceAddress);
     }
 
-    private void startService(){
-        // Code to manage Service lifecycle.
-        final ServiceConnection mServiceConnection = new ServiceConnection() {
+//    Handler handler = new Handler(new Handler.Callback() {
+//        @Override
+//        public boolean handleMessage(Message message) {
+//            switch (message.what){
+//                case STATE_LISTENING:
+//
+//                    break;
+//
+//            }
+//        }
+//    });
 
-            @Override
-            public void onServiceConnected(ComponentName componentName, IBinder service) {
-                mBluetoothLeService = ((BluetoothLeService.LocalBinder) service).getService();
-                if (!mBluetoothLeService.initialize()) {
-                    Log.e(getClass().getSimpleName(), "Unable to initialize Bluetooth");
-                    finish();
+    private class ServerClass extends Thread {
+        private BluetoothServerSocket serverSocket;
+        public ServerClass(){
+            try {
+                serverSocket = mBluetoothAdapter.listenUsingRfcommWithServiceRecord(getResources().getString(R.string.app_name),MY_UUID);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void run() {
+            BluetoothSocket socket = null;
+
+            while (socket==null){
+                try {
+                    Message message = Message.obtain();
+                    message.what = STATE_CONNECTING;
+
+                    socket= serverSocket.accept();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    Message message = Message.obtain();
+                    message.what = STATE_CONNECTION_FAILED;
                 }
-                // Automatically connects to the device upon successful start-up initialization.
-//                mBluetoothLeService.connect(mDeviceAddress);
-            }
 
-            @Override
-            public void onServiceDisconnected(ComponentName componentName) {
-                mBluetoothLeService = null;
+                if(socket!=null){
+                    Message message = Message.obtain();
+                    message.what = STATE_CONNECTED;
+                    break;
+                }
             }
-        };
-        Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
-        bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
+        }
+    }
+
+    private class ClientClass extends Thread{
+        private BluetoothDevice mDevice;
+        private BluetoothSocket mSocket;
+
+        public ClientClass (BluetoothDevice device){
+            this.mDevice = device;
+
+            try {
+                mSocket = device.createRfcommSocketToServiceRecord(MY_UUID);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void run() {
+            try {
+                mSocket.connect();
+                Message message = Message.obtain();
+                message.what = STATE_CONNECTED;
+
+            } catch (IOException e) {
+                e.printStackTrace();
+                Message message = Message.obtain();
+                message.what = STATE_CONNECTION_FAILED;
+            }
+        }
     }
 
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        // Don't forget to unregister the ACTION_FOUND receiver.
-        unregisterReceiver(mReceiver);
-
-    }
 }
