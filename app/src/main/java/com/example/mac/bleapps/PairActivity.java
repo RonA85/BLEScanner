@@ -63,7 +63,6 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
     private BluetoothAdapter mBluetoothAdapter;
     private DeviceAdapter mDeviceAdapter;
     private BluetoothManager mBluetoothManager;
-    private BluetoothLeService mBluetoothLeService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -110,7 +109,6 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
         // Don't forget to unregister the ACTION_FOUND receiver.
         unregisterReceiver(mReceiver);
 //        unbindService(mServiceConnection);
-//        mBluetoothLeService = null;
 
     }
 
@@ -191,21 +189,8 @@ public class PairActivity extends AppCompatActivity implements DeviceAdapter.OnD
         }
         ClientClass clientClass = new ClientClass(device);
         clientClass.start();
-//        Toast.makeText(this,mDeviceAddress,Toast.LENGTH_SHORT).show();
-//        mBluetoothLeService.connect(mDeviceAddress);
     }
 
-//    Handler handler = new Handler(new Handler.Callback() {
-//        @Override
-//        public boolean handleMessage(Message message) {
-//            switch (message.what){
-//                case STATE_LISTENING:
-//
-//                    break;
-//
-//            }
-//        }
-//    });
 
     private class ServerClass extends Thread {
         private BluetoothServerSocket serverSocket;
